@@ -1,6 +1,6 @@
 # AbleTouch
 
-Control Ableton Live track volumes with your fingers via webcam. No hardware needed.
+touch your ableton
 
 ![demo placeholder](https://placehold.co/800x400/111/333?text=abletouch)
 
