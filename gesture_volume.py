@@ -10,6 +10,7 @@ Uses PIP joint bend angle in 3D – orientation-independent, per-finger isolated
 
 import math
 import time
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -25,7 +26,7 @@ import rtmidi
 # ---------------------------------------------------------------------------
 MIN_CURL     = 0.05
 MAX_CURL     = 0.65
-SMOOTH_ALPHA = 0.30
+SMOOTH_ALPHA = 0.50   # higher = faster response
 DEADBAND     = 2
 CC_NUMBER    = 7
 
@@ -66,6 +67,33 @@ BAR_GAP  = 8
 BAR_H    = 200
 BAR_Y    = 50
 SIDE_PAD = 16
+
+DETECT_W = 640   # downscaled resolution for MediaPipe (4x fewer pixels)
+DETECT_H = 360
+
+
+class CameraReader:
+    """Background thread that always has the freshest frame ready."""
+    def __init__(self, cap):
+        self._cap    = cap
+        self._frame  = None
+        self._lock   = threading.Lock()
+        self._stop   = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while not self._stop.is_set():
+            ret, frame = self._cap.read()
+            if ret:
+                with self._lock:
+                    self._frame = frame
+
+    def read(self):
+        with self._lock:
+            return self._frame
+
+    def release(self):
+        self._stop.set()
 
 
 def ensure_model() -> str:
@@ -178,6 +206,9 @@ def main():
         raise RuntimeError("Cannot open webcam.")
     cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
+    cap.set(cv2.CAP_PROP_FPS,          60)
+    reader = CameraReader(cap)
 
     smooth    = {"Left": [0.0]*4, "Right": [0.0]*4}
     last_sent = {"Left": [-1]*4,  "Right": [-1]*4}
@@ -187,15 +218,17 @@ def main():
     print("[INFO] Hold palm toward camera. Curl each finger to control its track. ESC to quit.")
 
     while True:
-        ret, frame = cap.read()
-        if not ret:
+        frame = reader.read()
+        if frame is None:
+            time.sleep(0.001)
             continue
 
         frame = cv2.flip(frame, 1)
         h, w  = frame.shape[:2]
 
-        rgb     = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_img  = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        small  = cv2.resize(frame, (DETECT_W, DETECT_H))
+        rgb    = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
+        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         ts_ms   = int((time.time() - t0) * 1000)
         results = detector.detect_for_video(mp_img, ts_ms)
 
@@ -235,6 +268,7 @@ def main():
             break
 
     detector.close()
+    reader.release()
     cap.release()
     cv2.destroyAllWindows()
     midiout.close_port()
