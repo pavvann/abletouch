@@ -20,6 +20,7 @@ from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 import numpy as np
 import rtmidi
+from PIL import Image, ImageDraw, ImageFont
 
 # ---------------------------------------------------------------------------
 # Tuning
@@ -70,6 +71,35 @@ SIDE_PAD = 16
 
 DETECT_W = 640   # downscaled resolution for MediaPipe (4x fewer pixels)
 DETECT_H = 360
+
+FIRE_THRESHOLD = 15   # CC value above which 🔥 replaces the dot
+EMOJI_SIZE     = 40
+
+
+def build_emoji_img(emoji: str, size: int) -> np.ndarray:
+    try:
+        font = ImageFont.truetype("/System/Library/Fonts/Apple Color Emoji.ttc", size)
+    except OSError:
+        return np.zeros((size, size, 4), dtype=np.uint8)
+    canvas = Image.new("RGBA", (size + 8, size + 8), (0, 0, 0, 0))
+    ImageDraw.Draw(canvas).text((4, 4), emoji, font=font, embedded_color=True)
+    return np.array(canvas)
+
+
+def overlay_emoji(frame, emoji_img, cx, cy):
+    eh, ew = emoji_img.shape[:2]
+    x1, y1 = cx - ew // 2, cy - eh // 2
+    x2, y2 = x1 + ew, y1 + eh
+    fx1, fy1 = max(0, x1), max(0, y1)
+    fx2, fy2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+    if fx2 <= fx1 or fy2 <= fy1:
+        return
+    ex1, ey1 = fx1 - x1, fy1 - y1
+    ex2, ey2 = ex1 + (fx2 - fx1), ey1 + (fy2 - fy1)
+    alpha = emoji_img[ey1:ey2, ex1:ex2, 3:4] / 255.0
+    rgb   = emoji_img[ey1:ey2, ex1:ex2, :3][:, :, ::-1]
+    roi   = frame[fy1:fy2, fx1:fx2].astype(np.float32)
+    frame[fy1:fy2, fx1:fx2] = (roi * (1 - alpha) + rgb * alpha).astype(np.uint8)
 
 
 class CameraReader:
@@ -155,14 +185,16 @@ def draw_skeleton(frame, landmarks, w, h):
         cv2.circle(frame, pt, 3, (200, 200, 200), -1)
 
 
-def draw_fingertips(frame, landmarks, w, h, cc_vals):
+def draw_fingertips(frame, landmarks, w, h, cc_vals, fire_img):
     for fi, (name, tip_i, dip_i, pip_i, mcp_i) in enumerate(FINGERS):
-        pt     = lm_px(landmarks[tip_i], w, h)
-        color  = FINGER_COLORS[fi]
-        pct    = int(cc_vals[fi] / 127 * 100)
-        radius = 6 + int(pct / 100 * 8)
-        cv2.circle(frame, pt, radius, color, -1)
-        cv2.putText(frame, f"{pct}%", (pt[0] - 14, pt[1] - radius - 4),
+        pt    = lm_px(landmarks[tip_i], w, h)
+        color = FINGER_COLORS[fi]
+        pct   = int(cc_vals[fi] / 127 * 100)
+        if cc_vals[fi] > FIRE_THRESHOLD:
+            overlay_emoji(frame, fire_img, pt[0], pt[1])
+        else:
+            cv2.circle(frame, pt, 7, color, -1)
+        cv2.putText(frame, f"{pct}%", (pt[0] - 14, pt[1] - EMOJI_SIZE // 2 - 4),
                     FONT, 0.42, color, 1, cv2.LINE_AA)
 
 
@@ -190,6 +222,7 @@ def draw_bars(frame, cc_vals, side, active, w):
 def main():
     model_path = ensure_model()
     midiout    = open_midi_port()
+    fire_img   = build_emoji_img("🔥", EMOJI_SIZE)
 
     base_opts = mp_python.BaseOptions(model_asset_path=model_path)
     options   = mp_vision.HandLandmarkerOptions(
@@ -255,7 +288,7 @@ def main():
                     if abs(cc_val - last_sent[label][fi]) > DEADBAND:
                         send_cc(midiout, ch_offset[label] + fi, CC_NUMBER, cc_val)
                         last_sent[label][fi] = cc_val
-                draw_fingertips(frame, hand_lms, w, h, cc_vals)
+                draw_fingertips(frame, hand_lms, w, h, cc_vals, fire_img)
 
         left_vals  = [last_sent["Left"][i]  if last_sent["Left"][i]  >= 0 else int(smooth["Left"][i])  for i in range(4)]
         right_vals = [last_sent["Right"][i] if last_sent["Right"][i] >= 0 else int(smooth["Right"][i]) for i in range(4)]
