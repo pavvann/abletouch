@@ -214,6 +214,9 @@ def main():
     last_sent = {"Left": [-1]*4,  "Right": [-1]*4}
     ch_offset = {"Left": 0,       "Right": 4}
 
+    cv2.namedWindow(" ", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(" ", cv2.WND_PROP_TOPMOST, 1)
+
     t0 = prev_time = time.time()
     print("[INFO] Hold palm toward camera. Curl each finger to control its track. ESC to quit.")
 
@@ -225,6 +228,9 @@ def main():
 
         frame = cv2.flip(frame, 1)
         h, w  = frame.shape[:2]
+
+        gray  = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
         small  = cv2.resize(frame, (DETECT_W, DETECT_H))
         rgb    = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
@@ -263,14 +269,14 @@ def main():
                     (w//2 - 210, h-12), FONT, 0.45, COLOR_INFO, 1, cv2.LINE_AA)
         prev_time = now
 
-        cv2.imshow("AbleTouch", frame)
+        cv2.imshow(" ", frame)
         if cv2.waitKey(1) & 0xFF == 27:
             break
 
     detector.close()
     reader.release()
     cap.release()
-    cv2.destroyAllWindows()
+    cv2.destroyWindow(" ")
     midiout.close_port()
     del midiout
 
